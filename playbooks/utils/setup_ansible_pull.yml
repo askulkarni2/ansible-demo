@@ -1,0 +1,84 @@
+# ansible-pull setup
+#
+# on remote hosts, set up ansible to run periodically using the latest code
+# from a particular checkout, in pull based fashion, inverting Ansible's
+# usual push-based operating mode.
+#
+# This particular pull based mode is ideal for:
+#
+# (A) massive scale out
+# (B) continual system remediation
+# (C) applying a hotfix
+#
+---
+- hosts: localhost
+  gather_facts: yes
+  connection: local
+
+  vars:
+    # parameters for a single run
+    minute: "{{ ansible_date_time.minute | int + 1 }}"
+    hour: "{{ ansible_date_time.hour }}"
+    day: "{{ ansible_date_time.day }}"
+    month: "{{ ansible_date_time.month }}"
+    run_once: "{{ minute | int % 59 }} {{ hour }} {{ day }} {{ month }} *"
+
+    # randomize cron job to reduce load on repo
+    schedule: "{{ 59 | random }} * * * *"
+    cron_user: root
+    logfile: /var/log/ansible-pull.log
+    workdir: ~/cloud_automation
+    scriptsdir: ~/scripts
+
+  tasks:
+    - name: Get instance ec2 facts
+      action: ec2_facts
+      register: ec2_facts
+
+    - name: Get resource tags from ec2 facts
+      action: ec2_tag
+              resource="{{ ec2_facts.ansible_facts.ansible_ec2_instance_id }}"
+              region="{{ ec2_facts.ansible_facts.ansible_ec2_placement_region }}"
+              state=list
+      register: tags
+
+    - name: set some facts
+      set_fact:
+        name: "{{ tags.tags.Name }}"
+        project: "{{ tags.tags.Project }}"
+        branch: "{{ tags.tags.BranchTag }}"
+        role: "{{ tags.tags.MachineRole }}"
+        env: "{{ tags.tags.Env }}"
+        repo_url: "{{ ansible_local.git.repo_url }}"
+
+    - name: Scan the SSH key for the repo host and make it known
+      shell: ssh-keyscan git >> /etc/ssh/ssh_known_hosts
+      sudo: yes
+      ignore_errors: yes
+
+    - name: Create local directory to work from
+      file: path="{{ workdir }}" state=directory
+            owner="{{ cron_user }}" group="{{ cron_user }}" mode=0755
+
+    - name: Create scripts dir
+      file: path="{{ scriptsdir }}" state=directory
+            owner="{{ cron_user }}" group="{{ cron_user }}" mode=0755
+
+    - name: Create the ansible_pull.sh from template
+      template: src=templates/scripts_ansible_pull_sh.j2
+                dest="{{ scriptsdir }}/ansible_pull.sh" mode=0744
+                owner="{{ cron_user }}" group="{{ cron_user }}"
+
+    - name: Create crontab entry to clone/pull git repository
+      template: src=templates/etc_cron.d_ansible-pull.j2
+                dest=/etc/cron.d/ansible-pull owner=root group=root mode=0644
+      sudo: yes
+
+    - name: touch the log file
+      file: path=/var/log/ansible-pull.log owner=root group=root
+            mode=0644 state=touch
+
+    - name: Create logrotate entry for ansible-pull.log
+      template: src=templates/etc_logrotate.d_ansible-pull.j2
+                dest=/etc/logrotate.d/ansible-pull owner=root group=root mode=0644
+      sudo: yes

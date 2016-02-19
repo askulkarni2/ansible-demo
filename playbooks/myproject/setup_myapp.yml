@@ -1,0 +1,13 @@
+--
+- hosts: localhost
+  gather_facts: yes
+
+  pre_tasks:
+    - name: Some pre-tasks
+
+  roles:
+    - nginx
+    - mywebapp
+
+  post_tasks:
+    - name: Some post-tasks

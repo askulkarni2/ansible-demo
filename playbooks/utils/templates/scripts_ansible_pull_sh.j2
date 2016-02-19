@@ -1,0 +1,43 @@
+#!/bin/bash -xe
+# "{{ ansible_managed }}"
+export PATH=$PATH:/usr/local/bin
+lock="/tmp/ansible-playbook.lock"
+BASE_URL="http://169.254.169.254/latest/meta-data"
+INSTANCE_TAGFILE=~/.instance_tags
+
+# Check if lock exists, return if yes
+if [ -e $lock ]; then
+   echo "Sorry, someone is already running ansible from `cat $lock`" >> {{ logfile }}
+   return
+fi
+
+# Install signal handlers
+trap "rm -f $lock; trap - INT TERM EXIT; return" INT TERM EXIT
+
+# Create lock file, saving originating PID
+echo $$ > $lock
+
+# refresh instance tags
+ID=$(wget -q -O - ${BASE_URL}/instance-id)
+REGION=$(wget -q -O - ${BASE_URL}/placement/availability-zone | sed -e "s/.$//")
+aws ec2 describe-tags --filters "Name=resource-id,Values=$ID" \
+  --region $REGION --output=text > $INSTANCE_TAGFILE
+branch_tag=$(grep BranchTag $INSTANCE_TAGFILE | cut -f5)
+
+# Run ansible with arguments passed at the command line
+PYTHONUNBUFFERED=1 \
+  ANSIBLE_HOME={{ workdir }}/ansible \
+  ANSIBLE_CONFIG={{ workdir }}/ansible/inventory/ansible.cfg \
+  ANSIBLE_LIBRARY={{ workdir }}/ansible/library \
+  ansible-pull -o \
+  -i ansible/inventory/{{ project }}/{{ vpc_name }}/hosts_{{ cluster }} \
+  -d {{ workdir }} -U {{ repo_url }} -C $branch_tag \
+  ansible/playbooks/{{ project }}/setup_{{ role }}.yml  \
+  --vault-password-file=~/.vault.sh \
+  --tags "{{ cli_tags }}" 2>&1 >> {{ logfile }}
+
+# Remove lock file
+rm $lock
+
+# Remove signal handlers
+trap - INT TERM EXIT

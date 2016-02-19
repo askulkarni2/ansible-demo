@@ -1,0 +1,5 @@
+# "{{ ansible_managed }}"
+# Cron job to git clone/pull a repo and then run locally
+MAILTO=""
+{{ run_once }} {{ cron_user }} $HOME/scripts/ansible_pull.sh
+{{ schedule }} {{ cron_user }} $HOME/scripts/ansible_pull.sh
